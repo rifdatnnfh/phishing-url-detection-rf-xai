@@ -18,6 +18,7 @@ from features import (FEATURE_META, FEATURE_ORDER, extract_features_14,
                       get_hostname)
 
 # Path dinamis berbasis lokasi file app.py menggunakan pathlib
+RANDOM_STATE = 42
 BASE_DIR = Path(__file__).parent
 
 MODEL_PATH = BASE_DIR / "model" / "random_forest_phishing_model.joblib"
