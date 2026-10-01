@@ -5,6 +5,7 @@ Aplikasi web lokal menggunakan Streamlit.
 Jalankan dengan:
     streamlit run app.py
 """
+import re
 from pathlib import Path
 
 import joblib
@@ -258,10 +259,35 @@ def build_reason_sentence(fname, value, shap_val):
 
 
 # ----------------------------------------------------------------------------
+# Normalisasi URL sebelum ekstraksi fitur
+# ----------------------------------------------------------------------------
+def normalize_url(raw_url: str) -> str:
+    """Menyeragamkan penulisan URL sebelum fitur diekstrak.
+
+    Garis miring (/) di akhir path tidak mengubah tujuan URL
+    (https://www.youtube.com/ dan https://www.youtube.com adalah situs yang sama),
+    tetapi menambah 1 karakter pada fitur UrlLength sehingga model Random Forest
+    bisa memberi hasil berbeda untuk dua URL yang sama. Karena itu, garis miring
+    penutup dibuang terlebih dahulu. Skema (http/https) dan bagian query/fragment
+    tidak diubah, jadi fitur NoHttps dan fitur lainnya tetap dihitung apa adanya.
+    """
+    url = str(raw_url).strip()
+    m = re.match(r"^([^?#]*)(.*)$", url, flags=re.S)
+    base, tail = m.group(1), m.group(2)
+    if "://" in base:
+        scheme, rest = base.split("://", 1)
+        base = scheme + "://" + rest.rstrip("/")
+    else:
+        base = base.rstrip("/")
+    return base + tail
+
+
+# ----------------------------------------------------------------------------
 # Fungsi inti: scan URL -> prediksi + SHAP
 # ----------------------------------------------------------------------------
 def scan_url(raw_url: str) -> dict:
-    feats = extract_features_14(raw_url)
+    url_normalized = normalize_url(raw_url)
+    feats = extract_features_14(url_normalized)
     X_row = pd.DataFrame([feats])[feature_cols]
 
     pred = int(model.predict(X_row)[0])
@@ -292,7 +318,8 @@ def scan_url(raw_url: str) -> dict:
 
     return {
         "url": raw_url,
-        "hostname": get_hostname(raw_url),
+        "url_normalized": url_normalized,
+        "hostname": get_hostname(url_normalized),
         "label": label,
         "proba_phishing": proba_phishing,
         "proba_legitimate": 1 - proba_phishing,
@@ -349,6 +376,11 @@ def render_result(result):
     with col_url:
         st.markdown(f"**URL:** `{result['url']}`")
         st.caption(f"hostname: {result['hostname']}")
+        if result["url_normalized"] != result["url"].strip():
+            st.caption(
+                f"URL dinormalisasi sebelum dianalisis (garis miring di akhir dibuang): "
+                f"`{result['url_normalized']}`"
+            )
 
     # --- probabilitas ---
     c1, c2 = st.columns(2)
