@@ -392,7 +392,7 @@ def render_result(result):
 # ----------------------------------------------------------------------------
 with st.sidebar:
     st.markdown("## 🛡️ URL Sentinel")
-    st.caption("Random Forest + Explainable AI (SHAP) — dijalankan sepenuhnya secara lokal.")
+    st.caption("Random Forest + Explainable AI (SHAP)")
     st.markdown("---")
     st.markdown("**Tentang aplikasi**")
     st.write(
