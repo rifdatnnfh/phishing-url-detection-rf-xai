@@ -5,6 +5,8 @@ Aplikasi web lokal menggunakan Streamlit.
 Jalankan dengan:
     streamlit run app.py
 """
+from pathlib import Path
+
 import joblib
 import matplotlib.pyplot as plt
 import numpy as np
@@ -15,9 +17,15 @@ import streamlit as st
 from features import (FEATURE_META, FEATURE_ORDER, extract_features_14,
                       get_hostname)
 
-RANDOM_STATE = 42
-DATASET_KAGGLE_PATH = "dataset_kaggle.csv"
-DATASET_PHISHTANK_PATH = "dataset_phishtank.csv"
+# Path dinamis berbasis lokasi file app.py menggunakan pathlib
+BASE_DIR = Path(__file__).parent
+
+MODEL_PATH = BASE_DIR / "model" / "random_forest_phishing_model.joblib"
+COLS_PATH = BASE_DIR / "model" / "feature_columns.joblib"
+
+DATASET_KAGGLE_PATH = BASE_DIR / "dataset_kaggle.csv"
+DATASET_PHISHTANK_PATH = BASE_DIR / "dataset_phishtank.csv"
+
 GLOBAL_SHAP_SAMPLE_SIZE = 500
 
 # ----------------------------------------------------------------------------
@@ -29,10 +37,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
-MODEL_PATH = "model/random_forest_phishing_model.joblib"
-COLS_PATH = "model/feature_columns.joblib"
-
 
 # ----------------------------------------------------------------------------
 # Load model (di-cache agar tidak dimuat ulang setiap interaksi)
