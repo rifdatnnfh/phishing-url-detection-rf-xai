@@ -112,7 +112,7 @@ def compute_global_shap(_model, _explainer, sample_size=GLOBAL_SHAP_SAMPLE_SIZE)
 
 
 def render_global_summary_plot(X_sample, shap_values_phishing):
-    """SHAP Summary Plot (dot) — ringkasan global kontribusi & arah tiap fitur."""
+    """SHAP Summary Plot (dot) ringkasan global kontribusi & arah tiap fitur."""
     fig, ax = plt.subplots(figsize=(8, 6))
     shap.summary_plot(
         shap_values_phishing, X_sample, plot_type="dot", show=False, plot_size=None
@@ -124,7 +124,7 @@ def render_global_summary_plot(X_sample, shap_values_phishing):
 
 
 def render_global_bar_plot(feature_cols, shap_values_phishing):
-    """Bar plot gabungan: rata-rata |SHAP value| per fitur (kepentingan global fitur)."""
+    """Bar plot gabungan rata-rata SHAP value per fitur (kepentingan global fitur)."""
     mean_abs_shap = pd.Series(
         np.abs(shap_values_phishing).mean(axis=0), index=feature_cols
     ).sort_values(ascending=True)
@@ -159,11 +159,11 @@ def render_global_bar_plot(feature_cols, shap_values_phishing):
 
 
 def render_global_insight():
-    """Panel Insight Global Model: Summary Plot + Bar Plot gabungan (Bagian 6.1 notebook)."""
+    """Panel Insight Global Model adalah Summary Plot + Bar Plot gabungan (Bagian 6.1 notebook)."""
     st.subheader("📊 Insight Global Model (SHAP)")
     st.caption(
         "Interpretasi ini menjelaskan pola umum yang dipelajari model Random Forest di seluruh "
-        f"data (sampel acak {GLOBAL_SHAP_SAMPLE_SIZE} URL), bukan hanya satu URL tertentu — "
+        f"data (sampel acak {GLOBAL_SHAP_SAMPLE_SIZE} URL), bukan hanya satu URL tertentu "
         "fitur apa yang paling berpengaruh secara umum, dan ke arah mana."
     )
 
@@ -171,17 +171,17 @@ def render_global_insight():
 
     col1, col2 = st.columns(2)
     with col1:
-        st.markdown("**SHAP Summary Plot — Ringkasan Global**")
+        st.markdown("**SHAP Summary Plot - Ringkasan Global**")
         st.caption(
-            "Setiap titik satu sampel URL; posisi menunjukkan besar & arah kontribusi, warna "
+            "Setiap titik satu sampel URL, posisi menunjukkan besar & arah kontribusi, warna "
             "menunjukkan nilai fitur asli (merah = tinggi, biru = rendah)."
         )
         render_global_summary_plot(X_sample, shap_values_phishing)
     with col2:
-        st.markdown("**SHAP Bar Plot — Kepentingan Fitur (Gabungan)**")
+        st.markdown("**SHAP Bar Plot - Kepentingan Fitur (Gabungan)**")
         st.caption(
             "Rata-rata besaran (magnitude) kontribusi absolut tiap fitur terhadap prediksi, "
-            "tanpa memandang arah pengaruhnya — semakin panjang batang, semakin berpengaruh."
+            "tanpa memandang arah pengaruhnya semakin panjang batang, semakin berpengaruh."
         )
         st.plotly_chart(
             render_global_bar_plot(FEATURE_ORDER, shap_values_phishing),
@@ -406,7 +406,7 @@ def render_result(result):
     # --- grafik SHAP ---
     st.subheader("Kontribusi Setiap Fitur (SHAP)")
     st.caption(
-        "Setiap batang menunjukkan seberapa besar & ke arah mana sebuah fitur mendorong prediksi model — "
+        "Setiap batang menunjukkan seberapa besar & ke arah mana sebuah fitur mendorong prediksi model "
         "merah mendorong ke **Phishing**, hijau mendorong ke **Legitimate**."
     )
     st.plotly_chart(render_shap_chart(result["features_sorted"]), use_container_width=True)
@@ -435,20 +435,17 @@ with st.sidebar:
         "atas keputusan model."
     )
     st.markdown("---")
-    st.markdown("**14 Fitur yang Dianalisis (Tabel 3)**")
+    st.markdown("**14 Fitur yang Dianalisis**")
     for f in FEATURE_ORDER:
         meta = FEATURE_META[f]
         st.caption(f"**{meta['no']}. {meta['label']}** — {meta['desc']}")
     st.markdown("---")
-    st.caption("Tidak ada data URL yang dikirim ke server luar; seluruh proses berjalan di komputer ini.")
+    st.caption("Tidak ada data URL yang dikirim ke server luar.")
     st.markdown("---")
     with st.expander("⚠️ Keterbatasan model"):
         st.caption(
-            "Model hanya menggunakan 14 fitur leksikal/struktural URL (Tabel 3) — "
+            "Model hanya menggunakan 14 fitur leksikal atau struktural URL"
             "tanpa reputasi domain, umur domain (WHOIS), atau analisis konten halaman. "
-            "Untuk URL yang probabilitasnya mendekati 50%, hasil sebaiknya tidak "
-            "dijadikan satu-satunya acuan keputusan. Lihat subbab 'Kesimpulan' pada "
-            "notebook penelitian untuk saran pengembangan lanjutan."
         )
 
 
@@ -457,7 +454,8 @@ with st.sidebar:
 # ----------------------------------------------------------------------------
 st.title("🛡️ URL Sentinel")
 st.markdown(
-    "##### Periksa sebuah URL — Random Forest memprediksi **Phishing** vs **Legitimate**, "
+    "##### Periksa sebuah URL"
+    "Random Forest memprediksi **Phishing** vs **Legitimate**, "
     "SHAP menjelaskan alasannya."
 )
 
