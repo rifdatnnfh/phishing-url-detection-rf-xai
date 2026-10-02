@@ -455,7 +455,7 @@ with st.sidebar:
 st.title("🛡️ URL Sentinel")
 st.markdown(
     "##### Periksa sebuah URL\n\n"
-    "Random Forest memprediksi **Phishing** vs **Legitimate**, \n\n"
+    "Random Forest memprediksi **Phishing** vs **Legitimate**, "
     "SHAP menjelaskan alasannya."
 )
 
