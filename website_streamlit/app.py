@@ -454,9 +454,9 @@ with st.sidebar:
 # ----------------------------------------------------------------------------
 st.title("🛡️ URL Sentinel")
 st.markdown(
-    "##### Periksa sebuah URL"
-    f"Random Forest memprediksi **Phishing** vs **Legitimate**, "
-    f"SHAP menjelaskan alasannya."
+    "##### Periksa sebuah URL\n\n"
+    "Random Forest memprediksi **Phishing** vs **Legitimate**, \n\n"
+    "SHAP menjelaskan alasannya."
 )
 
 tab_scan, tab_global = st.tabs(["🔍 Periksa URL", "📊 Insight Global Model (SHAP)"])
