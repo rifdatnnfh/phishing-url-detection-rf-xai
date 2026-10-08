@@ -7,6 +7,7 @@ Jalankan dengan:
 """
 import re
 from pathlib import Path
+from urllib.parse import urlparse
 
 import joblib
 import matplotlib.pyplot as plt
@@ -283,9 +284,78 @@ def normalize_url(raw_url: str) -> str:
 
 
 # ----------------------------------------------------------------------------
+#Validasi input URL (BARU)
+# ----------------------------------------------------------------------------
+#validasi input sebelum prediksi
+class InvalidURLError(ValueError):
+    """Dilempar saat input bukan URL yang valid (ditolak sebelum masuk model)."""
+
+
+MAX_URL_LENGTH = 2048
+_IPV4_RE = re.compile(r"^(?:\d{1,3}\.){3}\d{1,3}$")
+
+
+def validate_url(raw_url):
+    """Validasi format URL SEBELUM diproses model.
+
+    Mengembalikan tuple (valid, alasan). Input dianggap tidak valid jika:
+    kosong, terlalu panjang, mengandung spasi, skema bukan http/https,
+    tidak punya hostname, atau hostname tidak berbentuk domain/IPv4 yang wajar.
+    URL tanpa skema (mis. 'www.bbc.com/news') tetap diterima, sama seperti
+    perilaku extract_features_14 yang mengasumsikan 'http://'.
+    """
+    if raw_url is None or not str(raw_url).strip():
+        return False, "input kosong"
+    url = str(raw_url).strip()
+
+    if len(url) > MAX_URL_LENGTH:
+        return False, f"URL terlalu panjang (> {MAX_URL_LENGTH} karakter)"
+    if re.search(r"\s", url):
+        return False, "URL mengandung spasi"
+
+    if "://" in url:
+        scheme = url.split("://", 1)[0].lower()
+        if scheme not in ("http", "https"):
+            return False, f"skema '{scheme}://' tidak didukung (hanya http/https)"
+        candidate = url
+    else:
+        candidate = "http://" + url
+
+    try:
+        host = urlparse(candidate).hostname
+    except ValueError:
+        return False, "format URL tidak dapat dibaca"
+    if not host:
+        return False, "hostname/domain tidak ditemukan"
+    host = host.rstrip(".")
+    if len(host) > 253:
+        return False, "hostname terlalu panjang"
+
+    if _IPV4_RE.match(host):
+        if all(0 <= int(p) <= 255 for p in host.split(".")):
+            return True, "ok"
+        return False, "alamat IP tidak valid"
+
+    labels = host.split(".")
+    if len(labels) < 2:
+        return False, "hostname tidak berbentuk domain (tidak ada titik/TLD)"
+    if not all(re.fullmatch(r"[\w-]{1,63}", lb) for lb in labels):
+        return False, "hostname mengandung karakter atau label yang tidak valid"
+    if not re.fullmatch(r"xn--[\w-]+|[^\W\d_]{2,}", labels[-1]):
+        return False, "TLD tidak valid"
+    return True, "ok"
+# <<< [AKHIR PEMBARUAN]
+
+
+# ----------------------------------------------------------------------------
 # Fungsi inti: scan URL -> prediksi + SHAP
 # ----------------------------------------------------------------------------
 def scan_url(raw_url: str) -> dict:
+    # >>> [DIPERBARUI] tolak input tidak valid sebelum masuk model
+    valid, alasan = validate_url(raw_url)
+    if not valid:
+        raise InvalidURLError(alasan)
+    # <<< [AKHIR PEMBARUAN]
     url_normalized = normalize_url(raw_url)
     feats = extract_features_14(url_normalized)
     X_row = pd.DataFrame([feats])[feature_cols]
@@ -493,6 +563,13 @@ with tab_scan:
             try:
                 result = scan_url(target_url)
                 render_result(result)
+            # >>> [DIPERBARUI] pesan khusus untuk input tidak valid
+            except InvalidURLError as e:
+                st.warning(
+                    f"⚠️ Input tidak valid dan tidak diproses oleh model: {e}. "
+                    "Masukkan URL lengkap, mis. https://contoh.com/halaman"
+                )
+            # <<< [AKHIR PEMBARUAN]
             except Exception as e:
                 st.error(f"Gagal memproses URL: {e}")
     elif submitted:
