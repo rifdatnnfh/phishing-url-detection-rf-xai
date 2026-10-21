@@ -1,43 +1,77 @@
+"""
+Ekstraksi fitur URL untuk URL Sentinel.
+
+Isi file ini disamakan dengan notebook `Deteksi_Phishing_RF_XAI.ipynb`:
+32 fitur leksikal diekstraksi (14 fitur dasar + 18 fitur tambahan). Model akhir
+hanya memakai sebagian fitur hasil seleksi (permutation importance); daftar fitur
+yang dipakai model dibaca dari model/feature_columns.joblib oleh app.py.
+"""
+import math
 import re
+from collections import Counter
 from urllib.parse import urlparse
 
-FEATURE_ORDER = [
+BASE_FEATURES = [
     "UrlLength", "NumDots", "SubdomainLevel", "NumDash", "NumUnderscore",
     "NumPercent", "NumQueryComponents", "NumAmpersand", "RandomString",
     "NoHttps", "DomainInPaths", "DomainInSubdomains", "HTTPSInHostname",
     "HostnameLength",
 ]
+EXTRA_FEATURES = [
+    "PathLength", "QueryLength", "NumSlash", "NumDigits", "DigitRatio",
+    "NumEquals", "NumAt", "NumQuestion", "HostDigits", "IsIP", "NumKeywords",
+    "EntropyUrl", "EntropyHost", "NumSpecial", "HasPort", "NumUpper", "HasWWW",
+    "TLDLength",
+]
+FEATURE_ORDER = BASE_FEATURES + EXTRA_FEATURES
 
-# Deskripsi & metadata setiap fitur (dipakai untuk narasi penjelasan XAI)
+SENSITIVE_KEYWORDS = ["login", "secure", "verify", "account", "update", "bank",
+                      "signin", "confirm", "paypal", "password", "webscr", "ebay"]
+
+# Label & deskripsi setiap fitur (dipakai untuk tampilan dan narasi penjelasan XAI)
+_FEATURE_TEXT = {
+    "UrlLength":          ("Panjang URL", "Panjang keseluruhan string URL"),
+    "NumDots":            ("Jumlah Titik (.)", "Jumlah tanda titik dalam URL"),
+    "SubdomainLevel":     ("Tingkat Subdomain", "Jumlah level subdomain pada hostname"),
+    "NumDash":            ("Jumlah Tanda Hubung (-)", "Jumlah karakter '-' dalam URL"),
+    "NumUnderscore":      ("Jumlah Underscore (_)", "Jumlah karakter '_' dalam URL"),
+    "NumPercent":         ("Jumlah Persen (%)", "Jumlah karakter '%' (encoding) dalam URL"),
+    "NumQueryComponents": ("Jumlah Parameter Query", "Jumlah komponen parameter pada query string"),
+    "NumAmpersand":       ("Jumlah Ampersand (&)", "Jumlah karakter '&' dalam URL"),
+    "RandomString":       ("Indikasi String Acak",
+                           "Deteksi pola nama domain yang menyerupai string acak (DGA-like)"),
+    "NoHttps":            ("Tanpa HTTPS", "URL tidak menggunakan protokol HTTPS"),
+    "DomainInPaths":      ("Domain Muncul di Path", "Nama domain muncul kembali pada bagian path URL"),
+    "DomainInSubdomains": ("Domain Muncul di Subdomain",
+                           "Nama domain muncul di bagian subdomain (trik penyamaran)"),
+    "HTTPSInHostname":    ("Kata 'https' di Hostname",
+                           "Kata 'https' disisipkan di dalam hostname untuk terlihat aman"),
+    "HostnameLength":     ("Panjang Hostname", "Panjang nama host (domain + subdomain)"),
+    # --- fitur tambahan ---
+    "PathLength":         ("Panjang Path", "Panjang bagian path URL"),
+    "QueryLength":        ("Panjang Query", "Panjang bagian query string URL"),
+    "NumSlash":           ("Jumlah Garis Miring (/)", "Jumlah karakter '/' pada URL (tanpa skema)"),
+    "NumDigits":          ("Jumlah Digit", "Jumlah karakter angka dalam URL"),
+    "DigitRatio":         ("Rasio Digit", "Proporsi karakter angka terhadap panjang URL"),
+    "NumEquals":          ("Jumlah Tanda Sama Dengan (=)", "Jumlah karakter '=' dalam URL"),
+    "NumAt":              ("Jumlah Simbol @", "Jumlah karakter '@' dalam URL"),
+    "NumQuestion":        ("Jumlah Tanda Tanya (?)", "Jumlah karakter '?' dalam URL"),
+    "HostDigits":         ("Jumlah Digit di Hostname", "Jumlah karakter angka pada hostname"),
+    "IsIP":               ("Hostname Berupa IP", "Hostname berupa alamat IPv4, bukan nama domain"),
+    "NumKeywords":        ("Jumlah Kata Kunci Sensitif",
+                           "Jumlah kata kunci sensitif (login, secure, verify, dll.) dalam URL"),
+    "EntropyUrl":         ("Entropi URL", "Entropi Shannon karakter URL (tingkat keacakan)"),
+    "EntropyHost":        ("Entropi Hostname", "Entropi Shannon karakter hostname (tingkat keacakan)"),
+    "NumSpecial":         ("Jumlah Karakter Khusus", "Jumlah karakter non-alfanumerik dalam URL"),
+    "HasPort":            ("Port Eksplisit", "URL menuliskan nomor port secara eksplisit"),
+    "NumUpper":           ("Jumlah Huruf Kapital", "Jumlah huruf kapital dalam URL"),
+    "HasWWW":             ("Hostname Diawali www", "Hostname diawali 'www.'"),
+    "TLDLength":          ("Panjang TLD", "Panjang ekstensi domain tingkat atas (TLD)"),
+}
+
 FEATURE_META = {
-    "UrlLength":          {"no": 1,  "label": "Panjang URL",
-                            "desc": "Panjang keseluruhan string URL"},
-    "NumDots":             {"no": 2,  "label": "Jumlah Titik (.)",
-                            "desc": "Jumlah tanda titik dalam URL"},
-    "SubdomainLevel":      {"no": 3,  "label": "Tingkat Subdomain",
-                            "desc": "Jumlah level subdomain pada hostname"},
-    "NumDash":              {"no": 4,  "label": "Jumlah Tanda Hubung (-)",
-                            "desc": "Jumlah karakter '-' dalam URL"},
-    "NumUnderscore":        {"no": 5,  "label": "Jumlah Underscore (_)",
-                            "desc": "Jumlah karakter '_' dalam URL"},
-    "NumPercent":           {"no": 6,  "label": "Jumlah Persen (%)",
-                            "desc": "Jumlah karakter '%' (encoding) dalam URL"},
-    "NumQueryComponents":   {"no": 7,  "label": "Jumlah Parameter Query",
-                            "desc": "Jumlah komponen parameter pada query string"},
-    "NumAmpersand":         {"no": 8,  "label": "Jumlah Ampersand (&)",
-                            "desc": "Jumlah karakter '&' dalam URL"},
-    "RandomString":         {"no": 9,  "label": "Indikasi String Acak",
-                            "desc": "Deteksi pola nama domain yang menyerupai string acak (DGA-like)"},
-    "NoHttps":              {"no": 10, "label": "Tanpa HTTPS",
-                            "desc": "URL tidak menggunakan protokol HTTPS"},
-    "DomainInPaths":        {"no": 11, "label": "Domain Muncul di Path",
-                            "desc": "Nama domain muncul kembali pada bagian path URL"},
-    "DomainInSubdomains":   {"no": 12, "label": "Domain Muncul di Subdomain",
-                            "desc": "Nama domain muncul di bagian subdomain (trik penyamaran)"},
-    "HTTPSInHostname":      {"no": 13, "label": "Kata 'https' di Hostname",
-                            "desc": "Kata 'https' disisipkan di dalam hostname untuk terlihat aman"},
-    "HostnameLength":       {"no": 14, "label": "Panjang Hostname",
-                            "desc": "Panjang nama host (domain + subdomain)"},
+    f: {"no": i + 1, "label": _FEATURE_TEXT[f][0], "desc": _FEATURE_TEXT[f][1]}
+    for i, f in enumerate(FEATURE_ORDER)
 }
 
 
@@ -72,16 +106,33 @@ def is_random_string(s: str) -> int:
 
 
 def infer_no_https(url: str) -> int:
+    """NoHttps: 1 = http://, 0 = https://. Skema tidak ditulis -> diasumsikan HTTPS."""
     u = url.lower()
     if u.startswith("https://"):
         return 0
     if u.startswith("http://"):
         return 1
-    return 0  # skema tidak dituliskan -> asumsikan HTTPS (standar web modern)
+    return 0
 
 
-def extract_features_14(url: str) -> dict:
-    """Mengekstrak 14 fitur URL sebagaimana didefinisikan pada Tabel 6."""
+def shannon_entropy(s: str) -> float:
+    """Entropi Shannon (bit per karakter) dari sebuah string."""
+    if not s:
+        return 0.0
+    counts = Counter(s)
+    n = len(s)
+    return -sum((c / n) * math.log2(c / n) for c in counts.values())
+
+
+def _has_port(parsed) -> int:
+    try:
+        return 1 if parsed.port is not None else 0
+    except ValueError:
+        return 0
+
+
+def extract_features(url: str) -> dict:
+    """Mengekstrak seluruh (32) fitur pada FEATURE_ORDER dari sebuah URL."""
     url = str(url).strip()
     parsed = urlparse(url if "://" in url else "http://" + url)
     hostname = get_hostname(url)
@@ -92,7 +143,12 @@ def extract_features_14(url: str) -> dict:
     host_parts = hostname.split(".")
     subdomain_part = ".".join(host_parts[:-2]) if len(host_parts) > 2 else ""
 
+    # URL tanpa skema: dipakai agar fitur tambahan tidak bergantung pada ada/tidaknya "http(s)://"
+    no_scheme = url.split("://", 1)[1] if "://" in url else url
+    low = url.lower()
+
     feats = {}
+    # --- 14 fitur dasar ---
     feats["UrlLength"] = len(url)
     feats["NumDots"] = url.count(".")
     feats["SubdomainLevel"] = max(hostname.count(".") - 1, 0)
@@ -107,4 +163,24 @@ def extract_features_14(url: str) -> dict:
     feats["DomainInSubdomains"] = 1 if domain_name and domain_name in subdomain_part.lower() else 0
     feats["HTTPSInHostname"] = 1 if "https" in hostname else 0
     feats["HostnameLength"] = len(hostname)
-    return feats
+    # --- fitur tambahan ---
+    feats["PathLength"] = len(path)
+    feats["QueryLength"] = len(query)
+    feats["NumSlash"] = no_scheme.count("/")
+    feats["NumDigits"] = sum(ch.isdigit() for ch in url)
+    feats["DigitRatio"] = sum(ch.isdigit() for ch in no_scheme) / max(len(no_scheme), 1)
+    feats["NumEquals"] = url.count("=")
+    feats["NumAt"] = url.count("@")
+    feats["NumQuestion"] = url.count("?")
+    feats["HostDigits"] = sum(ch.isdigit() for ch in hostname)
+    feats["IsIP"] = 1 if re.fullmatch(r"(\d{1,3}\.){3}\d{1,3}", hostname) else 0
+    feats["NumKeywords"] = sum(k in low for k in SENSITIVE_KEYWORDS)
+    feats["EntropyUrl"] = shannon_entropy(no_scheme)
+    feats["EntropyHost"] = shannon_entropy(hostname)
+    feats["NumSpecial"] = sum(not ch.isalnum() for ch in no_scheme)
+    feats["HasPort"] = _has_port(parsed)
+    feats["NumUpper"] = sum(ch.isupper() for ch in no_scheme)
+    feats["HasWWW"] = 1 if hostname.startswith("www.") else 0
+    feats["TLDLength"] = len(host_parts[-1]) if hostname else 0
+
+    return {f: feats[f] for f in FEATURE_ORDER}

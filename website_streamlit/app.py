@@ -2,6 +2,9 @@
 URL Sentinel — Deteksi Phishing URL berbasis Random Forest + Explainable AI (SHAP)
 Aplikasi web lokal menggunakan Streamlit.
 
+Disinkronkan dengan notebook v5 (Seleksi Fitur Sebelum Ekstraksi):
+32 fitur diekstraksi -> 19 fitur hasil permutation importance dipakai model.
+
 Jalankan dengan:
     streamlit run app.py
 """
@@ -16,20 +19,31 @@ import pandas as pd
 import plotly.graph_objects as go
 import shap
 import streamlit as st
-from features import (FEATURE_META, FEATURE_ORDER, extract_features_14,
-                      get_hostname)
+from features import FEATURE_META, extract_features, get_hostname
 
 # Path dinamis berbasis lokasi file app.py menggunakan pathlib
 RANDOM_STATE = 42
-BASE_DIR = Path(__file__).parent
+BASE_DIR = Path(__file__).resolve().parent
 
 MODEL_PATH = BASE_DIR / "model" / "random_forest_phishing_model.joblib"
 COLS_PATH = BASE_DIR / "model" / "feature_columns.joblib"
 
-DATASET_KAGGLE_PATH = BASE_DIR / "dataset_kaggle.csv"
-DATASET_PHISHTANK_PATH = BASE_DIR / "dataset_phishtank.csv"
+def _cari_dataset(nama):
+    """Mencari dataset di folder aplikasi, lalu di ../notebook (lokasi dataset di repo).
 
-GLOBAL_SHAP_SAMPLE_SIZE = 500
+    Memakai dataset_<nama>_1.csv bila ada, jika tidak dataset_<nama>.csv.
+    """
+    for folder in (BASE_DIR, BASE_DIR.parent / "notebook"):
+        for fname in (f"dataset_{nama}_1.csv", f"dataset_{nama}.csv"):
+            if (folder / fname).exists():
+                return folder / fname
+    return BASE_DIR / f"dataset_{nama}.csv"   # tidak ada: biarkan error FileNotFound yang jelas
+
+
+DATASET_KAGGLE_PATH = _cari_dataset("kaggle")
+DATASET_PHISHTANK_PATH = _cari_dataset("phishtank")
+
+GLOBAL_SHAP_SAMPLE_SIZE = 200   # sama dengan jumlah sampel SHAP pada notebook
 
 # ----------------------------------------------------------------------------
 # Konfigurasi halaman
@@ -47,12 +61,28 @@ st.set_page_config(
 @st.cache_resource(show_spinner="Memuat model Random Forest ...")
 def load_model():
     model = joblib.load(MODEL_PATH)
-    feature_cols = joblib.load(COLS_PATH)
+    feature_cols = list(joblib.load(COLS_PATH))
+
+    # Sumber kebenaran daftar fitur = feature_columns.joblib hasil notebook (19 fitur).
+    unknown = [f for f in feature_cols if f not in FEATURE_META]
+    if unknown:
+        raise ValueError(
+            f"feature_columns.joblib memuat fitur yang tidak dikenal features.py: {unknown}"
+        )
+    n_model = getattr(model, "n_features_in_", len(feature_cols))
+    if n_model != len(feature_cols):
+        raise ValueError(
+            f"Model dilatih dengan {n_model} fitur, tetapi feature_columns.joblib berisi "
+            f"{len(feature_cols)} fitur. Pastikan kedua file berasal dari notebook yang sama."
+        )
     explainer = shap.TreeExplainer(model)
     return model, feature_cols, explainer
 
 
 model, feature_cols, explainer = load_model()
+N_FEATURES = len(feature_cols)
+# Nomor urut tampilan mengikuti urutan fitur terpilih pada model
+FEATURE_NO = {f: i + 1 for i, f in enumerate(feature_cols)}
 
 
 def get_base_value():
@@ -62,17 +92,22 @@ def get_base_value():
     return float(ev)
 
 
+def feature_rows_to_frame(urls):
+    """Ekstraksi fitur untuk banyak URL sekaligus -> DataFrame berkolom feature_cols."""
+    return pd.DataFrame([extract_features(u) for u in urls])[feature_cols]
+
+
 # ----------------------------------------------------------------------------
 # Insight Global (SHAP) — mereproduksi Bagian 6.1 notebook penelitian:
-# dataset dibersihkan dengan proses yang identik (Sub-bab 4.1), lalu diambil sampel untuk
-# dihitung nilai SHAP-nya sehingga bisa ditampilkan Summary Plot (global) dan
-# Bar Plot gabungan (rata-rata |SHAP value| per fitur) di aplikasi web.
+# dataset dibersihkan dengan proses yang identik (Bagian 2 notebook), lalu diambil
+# sampel untuk dihitung nilai SHAP-nya sehingga bisa ditampilkan Summary Plot (global)
+# dan Bar Plot gabungan (rata-rata |SHAP value| per fitur) di aplikasi web.
 # ----------------------------------------------------------------------------
 @st.cache_data(show_spinner=False)
 def load_clean_dataset():
     """Menggabungkan & membersihkan dataset Kaggle + PhishTank.
 
-    Langkahnya identik dengan notebook penelitian (Bagian 2) dan Sub-bab 4.1 laporan:
+    Langkahnya identik dengan notebook penelitian (Bagian 2):
     concat -> hapus duplikat berdasarkan kolom url -> petakan label (legitimate=0,
     phishing=1) -> buang kategori lain (defacement/malware). Tidak ada perubahan huruf
     besar/kecil pada URL, karena notebook juga tidak melakukannya.
@@ -93,18 +128,19 @@ def load_clean_dataset():
 
 
 @st.cache_data(show_spinner="Menyiapkan sampel data & menghitung nilai SHAP global ...")
-def compute_global_shap(_model, _explainer, sample_size=GLOBAL_SHAP_SAMPLE_SIZE):
+def compute_global_shap(_model, _explainer, feature_key, sample_size=GLOBAL_SHAP_SAMPLE_SIZE):
     """Mengambil sampel acak dari dataset, mengekstrak fitur, dan menghitung SHAP-nya.
 
     Parameter diawali underscore (_model, _explainer) agar Streamlit tidak
-    mencoba melakukan hashing pada objek tersebut saat caching.
+    mencoba melakukan hashing pada objek tersebut saat caching. `feature_key`
+    (tuple nama fitur) ikut menjadi kunci cache supaya hasil lama otomatis tidak
+    dipakai bila daftar fitur model berubah.
     """
     dataset = load_clean_dataset()
     n = min(sample_size, len(dataset))
     sample = dataset.sample(n=n, random_state=RANDOM_STATE).reset_index(drop=True)
 
-    feature_rows = sample["url"].apply(lambda u: pd.Series(extract_features_14(u)))
-    X_sample = feature_rows[FEATURE_ORDER]
+    X_sample = feature_rows_to_frame(sample["url"])
 
     sv = _explainer.shap_values(X_sample)
     shap_values_phishing = sv[1] if isinstance(sv, list) else sv[:, :, 1]
@@ -114,23 +150,23 @@ def compute_global_shap(_model, _explainer, sample_size=GLOBAL_SHAP_SAMPLE_SIZE)
 
 def render_global_summary_plot(X_sample, shap_values_phishing):
     """SHAP Summary Plot (dot) ringkasan global kontribusi & arah tiap fitur."""
-    fig, ax = plt.subplots(figsize=(8, 6))
+    plt.figure(figsize=(8, max(6, 0.32 * N_FEATURES)))
     shap.summary_plot(
-        shap_values_phishing, X_sample, plot_type="dot", show=False, plot_size=None
+        shap_values_phishing, X_sample, plot_type="dot",
+        max_display=N_FEATURES, show=False, plot_size=None,
     )
     fig = plt.gcf()
-    fig.set_size_inches(8, 6)
     plt.tight_layout()
     st.pyplot(fig, clear_figure=True)
 
 
-def render_global_bar_plot(feature_cols, shap_values_phishing):
+def render_global_bar_plot(shap_values_phishing):
     """Bar plot gabungan rata-rata SHAP value per fitur (kepentingan global fitur)."""
     mean_abs_shap = pd.Series(
         np.abs(shap_values_phishing).mean(axis=0), index=feature_cols
     ).sort_values(ascending=True)
 
-    labels = [f"{FEATURE_META[f]['no']}. {FEATURE_META[f]['label']}" for f in mean_abs_shap.index]
+    labels = [f"{FEATURE_NO[f]}. {FEATURE_META[f]['label']}" for f in mean_abs_shap.index]
     values = mean_abs_shap.values
 
     fig = go.Figure(
@@ -149,7 +185,7 @@ def render_global_bar_plot(feature_cols, shap_values_phishing):
         )
     )
     fig.update_layout(
-        height=440,
+        height=max(440, 28 * N_FEATURES),
         margin=dict(l=10, r=40, t=10, b=10),
         xaxis_title="Rata-rata |SHAP value| (semakin besar = semakin berpengaruh)",
         plot_bgcolor="rgba(0,0,0,0)",
@@ -164,11 +200,13 @@ def render_global_insight():
     st.subheader("📊 Insight Global Model (SHAP)")
     st.caption(
         "Interpretasi ini menjelaskan pola umum yang dipelajari model Random Forest di seluruh "
-        f"data (sampel acak {GLOBAL_SHAP_SAMPLE_SIZE} URL), bukan hanya satu URL tertentu "
+        f"data (sampel acak {GLOBAL_SHAP_SAMPLE_SIZE} URL), bukan hanya satu URL tertentu — "
         "fitur apa yang paling berpengaruh secara umum, dan ke arah mana."
     )
 
-    X_sample, shap_values_phishing = compute_global_shap(model, explainer)
+    X_sample, shap_values_phishing = compute_global_shap(
+        model, explainer, tuple(feature_cols)
+    )
 
     col1, col2 = st.columns(2)
     with col1:
@@ -182,28 +220,33 @@ def render_global_insight():
         st.markdown("**SHAP Bar Plot - Kepentingan Fitur (Gabungan)**")
         st.caption(
             "Rata-rata besaran (magnitude) kontribusi absolut tiap fitur terhadap prediksi, "
-            "tanpa memandang arah pengaruhnya semakin panjang batang, semakin berpengaruh."
+            "tanpa memandang arah pengaruhnya — semakin panjang batang, semakin berpengaruh."
         )
         st.plotly_chart(
-            render_global_bar_plot(FEATURE_ORDER, shap_values_phishing),
+            render_global_bar_plot(shap_values_phishing),
             use_container_width=True,
         )
 
 
 # ----------------------------------------------------------------------------
 # Kalimat penjelasan XAI per fitur (kenapa fitur mendorong ke phishing/legit)
+# Disamakan dengan build_reason_sentence pada notebook v5 (Bagian 7).
 # ----------------------------------------------------------------------------
 def build_reason_sentence(fname, value, shap_val):
     pushes_phishing = shap_val > 0
     v = int(value)
+    vf = f"{float(value):.2f}"
+
+    pola_phish = "sesuai pola yang pada dataset penelitian lebih sering ditemukan pada URL phishing"
+    pola_legit = "sesuai pola yang pada dataset penelitian lebih sering ditemukan pada URL legitimate"
 
     templates = {
         "UrlLength": (
             f"URL cukup panjang ({v} karakter), pola yang sering dipakai untuk menyamarkan domain asli",
-            f"panjang URL wajar ({v} karakter), sesuai pola tautan yang umum digunakan",
+            f"panjang URL wajar ({v} karakter)",
         ),
         "NumDots": (
-            f"URL memiliki cukup banyak tanda titik ({v}), berpotensi menyembunyikan struktur domain sebenarnya",
+            f"URL memiliki cukup banyak tanda titik ({v})",
             f"jumlah tanda titik pada URL wajar ({v})",
         ),
         "SubdomainLevel": (
@@ -211,27 +254,27 @@ def build_reason_sentence(fname, value, shap_val):
             f"struktur subdomain URL sederhana ({v} level)",
         ),
         "NumDash": (
-            f"jumlah tanda hubung pada URL ini ({v}) sesuai pola yang pada dataset penelitian lebih sering ditemukan pada URL phishing",
-            f"jumlah tanda hubung pada URL ini ({v}) sesuai pola yang pada dataset penelitian lebih sering ditemukan pada URL legitimate",
+            f"jumlah tanda hubung pada URL ini ({v}) {pola_phish}",
+            f"jumlah tanda hubung pada URL ini ({v}) {pola_legit}",
         ),
         "NumUnderscore": (
-            f"jumlah underscore pada URL ini ({v}) sesuai pola yang pada dataset penelitian lebih sering ditemukan pada URL phishing",
-            f"jumlah underscore pada URL ini ({v}) sesuai pola yang pada dataset penelitian lebih sering ditemukan pada URL legitimate",
+            f"jumlah underscore pada URL ini ({v}) {pola_phish}",
+            f"jumlah underscore pada URL ini ({v}) {pola_legit}",
         ),
         "NumPercent": (
-            f"jumlah karakter encoding '%' pada URL ini ({v}) sesuai pola yang pada dataset penelitian lebih sering ditemukan pada URL phishing",
-            f"jumlah karakter encoding '%' pada URL ini ({v}) sesuai pola yang pada dataset penelitian lebih sering ditemukan pada URL legitimate",
+            f"jumlah karakter encoding '%' pada URL ini ({v}) {pola_phish}",
+            f"jumlah karakter encoding '%' pada URL ini ({v}) {pola_legit}",
         ),
         "NumQueryComponents": (
-            f"URL membawa cukup banyak parameter query ({v}), berpotensi menyisipkan data pengelabuan",
-            f"jumlah parameter query pada URL wajar ({v})",
+            f"URL membawa cukup banyak parameter query ({v})",
+            f"jumlah parameter query wajar ({v})",
         ),
         "NumAmpersand": (
-            f"URL memiliki beberapa simbol '&' ({v}) yang menandakan banyak parameter tersembunyi",
-            f"jumlah simbol '&' pada URL wajar ({v})",
+            f"URL memiliki beberapa simbol '&' ({v})",
+            f"jumlah simbol '&' wajar ({v})",
         ),
         "RandomString": (
-            "nama domain terindikasi berupa string acak (mirip hasil generate otomatis / DGA)",
+            "nama domain terindikasi berupa string acak (mirip hasil generate otomatis)",
             "nama domain tidak menyerupai string acak",
         ),
         "NoHttps": (
@@ -239,20 +282,94 @@ def build_reason_sentence(fname, value, shap_val):
             "URL sudah menggunakan protokol HTTPS",
         ),
         "DomainInPaths": (
-            f"nama domain muncul kembali pada bagian path URL ({v}), pola yang teridentifikasi pada dataset penelitian",
+            f"nama domain muncul kembali pada path URL ({v}), pola yang teridentifikasi pada dataset penelitian",
             f"nama domain tidak diulang secara mencurigakan pada path URL ({v})",
         ),
         "DomainInSubdomains": (
-            "nama domain resmi disisipkan sebagai subdomain (mis. 'paypal.secure-login.com'), pola khas phishing",
+            "nama domain resmi disisipkan sebagai subdomain, pola khas phishing",
             "tidak ditemukan penyisipan nama domain pada subdomain",
         ),
         "HTTPSInHostname": (
-            "kata 'https' disisipkan langsung di dalam hostname untuk membuat URL terlihat aman secara visual",
+            "kata 'https' disisipkan di dalam hostname agar URL terlihat aman secara visual",
             "tidak ditemukan kata 'https' yang disisipkan mencurigakan pada hostname",
         ),
         "HostnameLength": (
-            f"hostname URL cukup panjang ({v} karakter), pola umum saat domain palsu ditambahi kata-kata pengelabu",
+            f"hostname URL cukup panjang ({v} karakter)",
             f"panjang hostname wajar ({v} karakter)",
+        ),
+        "PathLength": (
+            f"path URL cukup panjang ({v} karakter)",
+            f"panjang path URL wajar ({v} karakter)",
+        ),
+        "QueryLength": (
+            f"query string cukup panjang ({v} karakter)",
+            f"panjang query string wajar ({v} karakter)",
+        ),
+        "NumSlash": (
+            f"jumlah garis miring (/) pada URL ini ({v}) {pola_phish}",
+            f"jumlah garis miring (/) pada URL ini ({v}) {pola_legit}",
+        ),
+        "NumDigits": (
+            f"URL memuat cukup banyak angka ({v})",
+            f"jumlah angka pada URL wajar ({v})",
+        ),
+        "DigitRatio": (
+            f"proporsi angka pada URL cukup tinggi ({vf})",
+            f"proporsi angka pada URL wajar ({vf})",
+        ),
+        "NumEquals": (
+            f"URL memiliki beberapa simbol '=' ({v}) yang menandakan banyak parameter",
+            f"jumlah simbol '=' pada URL wajar ({v})",
+        ),
+        "NumAt": (
+            f"URL memuat simbol '@' ({v}), teknik yang dipakai untuk menyamarkan tujuan sebenarnya",
+            f"tidak ada simbol '@' yang mencurigakan pada URL ({v})",
+        ),
+        "NumQuestion": (
+            f"jumlah tanda tanya (?) pada URL ini ({v}) {pola_phish}",
+            f"jumlah tanda tanya (?) pada URL ini ({v}) {pola_legit}",
+        ),
+        "HostDigits": (
+            f"hostname memuat angka ({v}), pola yang sering muncul pada domain palsu",
+            f"jumlah angka pada hostname wajar ({v})",
+        ),
+        "IsIP": (
+            "hostname berupa alamat IP, bukan nama domain",
+            "hostname berupa nama domain, bukan alamat IP",
+        ),
+        "NumKeywords": (
+            f"URL memuat kata kunci sensitif seperti login/secure/verify ({v} kata)",
+            f"tidak ada kata kunci sensitif yang menonjol pada URL ({v})",
+        ),
+        "EntropyUrl": (
+            f"karakter URL terlihat cukup acak (entropi {vf})",
+            f"pola karakter URL wajar (entropi {vf})",
+        ),
+        "EntropyHost": (
+            f"karakter hostname terlihat cukup acak (entropi {vf})",
+            f"pola karakter hostname wajar (entropi {vf})",
+        ),
+        "NumSpecial": (
+            f"URL memuat cukup banyak karakter khusus ({v})",
+            f"jumlah karakter khusus pada URL wajar ({v})",
+        ),
+        "HasPort": (
+            "URL menuliskan nomor port secara eksplisit",
+            "URL tidak menuliskan port yang tidak lazim",
+        ),
+        "NumUpper": (
+            f"URL memuat huruf kapital ({v})",
+            f"jumlah huruf kapital pada URL wajar ({v})",
+        ),
+        "HasWWW": (
+            f"hostname tidak diawali 'www.', {pola_phish}" if v == 0
+            else "hostname diawali 'www.' namun kombinasi fitur lain tetap mendorong ke arah phishing",
+            f"hostname diawali 'www.', {pola_legit}" if v == 1
+            else "hostname tidak diawali 'www.' namun kombinasi fitur lain tetap mendorong ke arah legitimate",
+        ),
+        "TLDLength": (
+            f"panjang TLD ({v} karakter) {pola_phish}",
+            f"panjang TLD ({v} karakter) {pola_legit}",
         ),
     }
     high_text, low_text = templates.get(fname, (f"nilai fitur {fname} tinggi", f"nilai fitur {fname} wajar"))
@@ -284,9 +401,8 @@ def normalize_url(raw_url: str) -> str:
 
 
 # ----------------------------------------------------------------------------
-#Validasi input URL (BARU)
+# Validasi input URL
 # ----------------------------------------------------------------------------
-#validasi input sebelum prediksi
 class InvalidURLError(ValueError):
     """Dilempar saat input bukan URL yang valid (ditolak sebelum masuk model)."""
 
@@ -301,8 +417,8 @@ def validate_url(raw_url):
     Mengembalikan tuple (valid, alasan). Input dianggap tidak valid jika:
     kosong, terlalu panjang, mengandung spasi, skema bukan http/https,
     tidak punya hostname, atau hostname tidak berbentuk domain/IPv4 yang wajar.
-    URL tanpa skema (mis. 'www.bbc.com/news') tetap diterima, sama seperti
-    perilaku extract_features_14 yang mengasumsikan 'http://'.
+    URL tanpa skema (mis. 'www.bbc.com/news') tetap diterima; pada ekstraksi fitur,
+    URL tanpa skema dianggap HTTPS (fitur NoHttps = 0), sesuai notebook.
     """
     if raw_url is None or not str(raw_url).strip():
         return False, "input kosong"
@@ -344,21 +460,20 @@ def validate_url(raw_url):
     if not re.fullmatch(r"xn--[\w-]+|[^\W\d_]{2,}", labels[-1]):
         return False, "TLD tidak valid"
     return True, "ok"
-# <<< [AKHIR PEMBARUAN]
 
 
 # ----------------------------------------------------------------------------
 # Fungsi inti: scan URL -> prediksi + SHAP
 # ----------------------------------------------------------------------------
 def scan_url(raw_url: str) -> dict:
-    # >>> [DIPERBARUI] tolak input tidak valid sebelum masuk model
+    # tolak input tidak valid sebelum masuk model
     valid, alasan = validate_url(raw_url)
     if not valid:
         raise InvalidURLError(alasan)
-    # <<< [AKHIR PEMBARUAN]
+
     url_normalized = normalize_url(raw_url)
-    feats = extract_features_14(url_normalized)
-    X_row = pd.DataFrame([feats])[feature_cols]
+    feats = extract_features(url_normalized)          # 32 fitur
+    X_row = pd.DataFrame([feats])[feature_cols]       # dipilih 19 fitur model
 
     pred = int(model.predict(X_row)[0])
     proba_phishing = float(model.predict_proba(X_row)[0, 1])
@@ -373,7 +488,7 @@ def scan_url(raw_url: str) -> dict:
         meta = FEATURE_META[fname]
         contributions.append({
             "feature": fname,
-            "no": meta["no"],
+            "no": FEATURE_NO[fname],
             "label": meta["label"],
             "desc": meta["desc"],
             "value": feats[fname],
@@ -384,7 +499,7 @@ def scan_url(raw_url: str) -> dict:
 
     contributions_sorted = sorted(contributions, key=lambda c: abs(c["shap"]), reverse=True)
     top_reasons = [c for c in contributions_sorted if c["direction"] == label.lower()][:5]
-    contributions_by_order = sorted(contributions, key=lambda c: FEATURE_ORDER.index(c["feature"]))
+    contributions_by_order = sorted(contributions, key=lambda c: c["no"])
 
     return {
         "url": raw_url,
@@ -405,7 +520,7 @@ def scan_url(raw_url: str) -> dict:
 # ----------------------------------------------------------------------------
 def render_shap_chart(features_sorted):
     """Diverging bar chart kontribusi SHAP tiap fitur (merah=phishing, hijau=legitimate)."""
-    top = list(reversed(features_sorted[:14]))
+    top = list(reversed(features_sorted))
     labels = [f"{f['no']}. {f['label']}" for f in top]
     values = [f["shap"] for f in top]
     colors = ["#F4574B" if v > 0 else "#34D399" for v in values]
@@ -423,7 +538,7 @@ def render_shap_chart(features_sorted):
     )
     fig.add_vline(x=0, line_width=1, line_color="#888")
     fig.update_layout(
-        height=440,
+        height=max(440, 28 * len(top)),
         margin=dict(l=10, r=40, t=10, b=10),
         xaxis_title="← mendukung Legitimate     |     mendukung Phishing →",
         plot_bgcolor="rgba(0,0,0,0)",
@@ -476,13 +591,13 @@ def render_result(result):
     # --- grafik SHAP ---
     st.subheader("Kontribusi Setiap Fitur (SHAP)")
     st.caption(
-        "Setiap batang menunjukkan seberapa besar & ke arah mana sebuah fitur mendorong prediksi model "
+        "Setiap batang menunjukkan seberapa besar & ke arah mana sebuah fitur mendorong prediksi model — "
         "merah mendorong ke **Phishing**, hijau mendorong ke **Legitimate**."
     )
     st.plotly_chart(render_shap_chart(result["features_sorted"]), use_container_width=True)
 
-    # --- tabel detail 14 fitur ---
-    with st.expander("Lihat tabel lengkap ke-14 fitur beserta nilai & kontribusinya"):
+    # --- tabel detail seluruh fitur ---
+    with st.expander(f"Lihat tabel lengkap ke-{N_FEATURES} fitur beserta nilai & kontribusinya"):
         df = pd.DataFrame(result["features"])[["no", "label", "desc", "value", "shap", "direction"]]
         df.columns = ["No", "Fitur", "Deskripsi", "Nilai", "Kontribusi SHAP", "Arah"]
         df["Arah"] = df["Arah"].map({"phishing": "→ Phishing", "legitimate": "→ Legitimate"})
@@ -505,17 +620,20 @@ with st.sidebar:
         "atas keputusan model."
     )
     st.markdown("---")
-    st.markdown("**14 Fitur yang Dianalisis**")
-    for f in FEATURE_ORDER:
+    st.markdown(f"**{N_FEATURES} Fitur yang Dianalisis**")
+    st.caption(
+        "Hasil seleksi fitur (permutation importance) dari 32 kandidat fitur leksikal URL."
+    )
+    for f in feature_cols:
         meta = FEATURE_META[f]
-        st.caption(f"**{meta['no']}. {meta['label']}** — {meta['desc']}")
+        st.caption(f"**{FEATURE_NO[f]}. {meta['label']}** — {meta['desc']}")
     st.markdown("---")
     st.caption("Tidak ada data URL yang dikirim ke server luar.")
     st.markdown("---")
     with st.expander("⚠️ Keterbatasan model"):
         st.caption(
-            "Model hanya menggunakan 14 fitur leksikal atau struktural URL"
-            "tanpa reputasi domain, umur domain (WHOIS), atau analisis konten halaman. "
+            f"Model hanya menggunakan {N_FEATURES} fitur leksikal atau struktural URL "
+            "tanpa reputasi domain, umur domain (WHOIS), atau analisis konten halaman."
         )
 
 
@@ -563,13 +681,11 @@ with tab_scan:
             try:
                 result = scan_url(target_url)
                 render_result(result)
-            # >>> [DIPERBARUI] pesan khusus untuk input tidak valid
             except InvalidURLError as e:
                 st.warning(
                     f"⚠️ Input tidak valid dan tidak diproses oleh model: {e}. "
                     "Masukkan URL lengkap, mis. https://contoh.com/halaman"
                 )
-            # <<< [AKHIR PEMBARUAN]
             except Exception as e:
                 st.error(f"Gagal memproses URL: {e}")
     elif submitted:
